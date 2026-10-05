@@ -1,33 +1,16 @@
 {
-  "name": "taixiu-predictor",
-  "version": "3.0.0",
-  "description": "🎲 AI dự đoán Tài Xỉu đa game - 12 engines ensemble + Telegram Bot",
+  "name": "taixiu-api",
+  "version": "5.0.0",
+  "description": "API dự đoán Tài Xỉu - JSON tiếng Việt",
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "bot": "node bot.js",
-    "dev": "concurrently \"npm run start\" \"npm run bot\""
+    "start": "node server.js"
   },
-  "keywords": [
-    "taixiu",
-    "taixiu-md5",
-    "predictor",
-    "ai",
-    "telegram-bot",
-    "ensemble",
-    "markov-chain"
-  ],
-  "author": "Tài Xỉu AI",
-  "license": "MIT",
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "node-fetch": "^3.3.2",
-    "node-telegram-bot-api": "^0.66.0"
-  },
-  "devDependencies": {
-    "concurrently": "^8.2.2"
+    "node-fetch": "^3.3.2"
   },
   "engines": {
     "node": ">=18.0.0"
