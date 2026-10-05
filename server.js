@@ -1,4 +1,4 @@
-// server.js — VIP 6.0: Nhận diện ALL CẦU, không random
+// server.js — VIP 8.0: 20 engines, 50+ cầu, multi-layer voting
 import express from 'express';
 import fetch from 'node-fetch';
 import cors from 'cors';
@@ -25,8 +25,18 @@ const GAMES = {
 
 // ================== BỘ NHỚ ==================
 const memory = {
-  taixiu: { patterns: new Map(), engines: new Map(), history: [], stats: { win: 0, lose: 0, streakWin: 0, maxStreakWin: 0 } },
-  md5:    { patterns: new Map(), engines: new Map(), history: [], stats: { win: 0, lose: 0, streakWin: 0, maxStreakWin: 0 } },
+  taixiu: {
+    patterns: new Map(),
+    engines: new Map(),
+    history: [],
+    stats: { win: 0, lose: 0, streakWin: 0, maxStreakWin: 0 },
+  },
+  md5: {
+    patterns: new Map(),
+    engines: new Map(),
+    history: [],
+    stats: { win: 0, lose: 0, streakWin: 0, maxStreakWin: 0 },
+  },
 };
 
 // ================== PERSIST ==================
@@ -38,7 +48,7 @@ function saveMemory() {
     obj[k] = {
       patterns: Array.from(memory[k].patterns.entries()),
       engines: Array.from(memory[k].engines.entries()),
-      history: memory[k].history.slice(0, 300),
+      history: memory[k].history.slice(0, 500),
       stats: memory[k].stats,
     };
   }
@@ -56,7 +66,7 @@ function loadMemory() {
       memory[k].history = obj[k].history || [];
       memory[k].stats = obj[k].stats || { win: 0, lose: 0, streakWin: 0, maxStreakWin: 0 };
     }
-    console.log('✅ Đã tải bộ nhớ VIP');
+    console.log('✅ Đã tải bộ nhớ VIP 8.0');
   } catch (e) { console.error('Lỗi load:', e.message); }
 }
 loadMemory();
@@ -69,21 +79,20 @@ const toSeries = (list) => list.map(toResult);
 const round = (v, n = 2) => Math.round(v * 10 ** n) / 10 ** n;
 
 // =====================================================================
-//              BỘ NHẬN DIỆN CẦU — 5 CẤP ĐỘ (30+ LOẠI CẦU)
+//        BỘ NHẬN DIỆN CẦU VIP — 50+ LOẠI (5 CẤP ĐỘ)
 // =====================================================================
 function detectAllPatterns(series) {
-  const s = series.slice(0, 80); // 80 phiên gần nhất
+  const s = series.slice(0, 100);
   const n = s.length;
   const joined = s.join('');
   const feats = {};
 
-  // ==========================================================
-  // CẤP 1: VI MÔ — từng phiên, streak, nhịp ngắn
-  // ==========================================================
-  feats.streak = 1;
+  // ========== CẤP 1: VI MÔ ==========
+  let streak = 1;
   for (let i = 1; i < n; i++) {
-    if (s[i] === s[0]) feats.streak++; else break;
+    if (s[i] === s[0]) streak++; else break;
   }
+  feats.streak = streak;
   feats.streakSide = s[0];
 
   let runs = [], cur = 1;
@@ -100,60 +109,72 @@ function detectAllPatterns(series) {
   feats.stdRun = Math.sqrt(runs.reduce((a, b) => a + (b - meanRun) ** 2, 0) / runs.length);
   feats.medianRun = [...runs].sort((a, b) => a - b)[Math.floor(runs.length / 2)];
 
-  // ==========================================================
-  // CẤP 2: TRUNG MÔ — cầu 1-1, 2-2, 3-3, 1-2-1, 2-1-2,...
-  // ==========================================================
-  // --- Cầu 1-1 (bệt đảo liên tục) ---
+  // ========== CẤP 2: TRUNG MÔ — 25+ LOẠI CẦU ==========
+  // Cầu 1-1
   feats.cau11 = /(TX|XT){4,}/.test(joined);
   feats.cau11_strong = /(TX|XT){6,}/.test(joined);
-  feats.cau11_length = (joined.match(/(TX|XT)+/) || [''])[0].length;
+  feats.cau11_super = /(TX|XT){10,}/.test(joined);
 
-  // --- Cầu 2-2 (bệt 2 nhịp) ---
+  // Cầu 2-2
   feats.cau22 = /(TTXX|XXTT){2,}/.test(joined);
   feats.cau22_strong = /(TTXX|XXTT){3,}/.test(joined);
+  feats.cau22_super = /(TTXX|XXTT){4,}/.test(joined);
 
-  // --- Cầu 3-3 ---
+  // Cầu 3-3
   feats.cau33 = /(TTTXXX|XXXTTT){2,}/.test(joined);
 
-  // --- Cầu 4-4 ---
+  // Cầu 4-4
   feats.cau44 = /(TTTTXXXX|XXXXTTTT)/.test(joined);
 
-  // --- Cầu 1-2-1 ---
+  // Cầu 1-2-1
   feats.cau121 = /TXXT|XTTX/.test(joined);
+  feats.cau121_nested = /TXXTTXXT|XTTXXTTX/.test(joined);
 
-  // --- Cầu 2-1-2 ---
+  // Cầu 2-1-2
   feats.cau212 = /TTXXTT|XXTTXX/.test(joined);
 
-  // --- Cầu 1-2-2-1 (đối xứng) ---
+  // Cầu 1-2-2-1 (đối xứng)
   feats.cau1221 = /TXXTTXXT|XTTXXTTX/.test(joined);
 
-  // --- Cầu 3-2-3 ---
+  // Cầu 3-2-3
   feats.cau323 = /TTTXXTTT|XXXTTXXX/.test(joined);
 
-  // --- Cầu bệt dài (>= 5) ---
-  feats.betDai = /(TTTTT|XXXXX)/.test(joined);
+  // Cầu 2-3-2
+  feats.cau232 = /TTXXXTT|XXTTTXX/.test(joined);
+
+  // Cầu 4-2-4
+  feats.cau424 = /TTTTXXTTTT|XXXXTTXXXX/.test(joined);
+
+  // Bệt dài
+  feats.betDai3 = /(TTT|XXX)/.test(joined);
   feats.betDai5 = /(TTTTT|XXXXX)/.test(joined);
   feats.betDai7 = /(TTTTTTT|XXXXXXX)/.test(joined);
+  feats.betDai9 = /(TTTTTTTTT|XXXXXXXXX)/.test(joined);
 
-  // --- Cầu gãy 2 nhịp ---
-  feats.cauGay = /(TTX|XXT)/.test(joined);
+  // Cầu gãy
+  feats.cauGay1 = /(TTX|XXT)/.test(joined);
+  feats.cauGay2 = /(TTXXT|XXTTX)/.test(joined);
 
-  // --- Cầu nghiêng (T > X hoặc X > T rõ rệt) ---
+  // Nghiêng
   const countT = s.filter(x => x === 'T').length;
   const countX = n - countT;
   feats.tyLeT = countT / n;
   feats.tyLeX = countX / n;
   feats.nghiengT = feats.tyLeT > 0.65;
   feats.nghiengX = feats.tyLeX > 0.65;
+  feats.nghiengCuc = feats.tyLeT > 0.75 || feats.tyLeX > 0.75;
 
-  // ==========================================================
-  // CẤP 3: VĨ MÔ — phân phối, entropy, chu kỳ
-  // ==========================================================
-  // --- Entropy (độ ngẫu nhiên) ---
+  // Cầu tăng dần (1-1, 2-2, 3-3, 4-4) — "cầu bậc thang"
+  feats.cauBacThang = /(TX|XT)(TTXX|XXTT)(TTTXXX|XXXTTT)/.test(joined);
+
+  // Cầu hình sin
+  feats.cauHinhSin = /(TTXXTT|XXTTXX|TTXXXTT)/.test(joined);
+
+  // ========== CẤP 3: VĨ MÔ ==========
   const pT = feats.tyLeT, pX = feats.tyLeX;
   feats.entropy = -(pT * Math.log2(pT || 0.0001) + pX * Math.log2(pX || 0.0001));
 
-  // --- Chu kỳ xuất hiện của T ---
+  // Chu kỳ T
   let cycleT = [], lastT = -1;
   for (let i = 0; i < n; i++) {
     if (s[i] === 'T') {
@@ -163,8 +184,11 @@ function detectAllPatterns(series) {
   }
   feats.chuKyT = cycleT.length > 0
     ? cycleT.reduce((a, b) => a + b, 0) / cycleT.length : 2;
+  feats.stdChuKyT = cycleT.length > 1
+    ? Math.sqrt(cycleT.reduce((a, b) => a + (b - feats.chuKyT) ** 2, 0) / cycleT.length)
+    : 0;
 
-  // --- Chu kỳ xuất hiện của X ---
+  // Chu kỳ X
   let cycleX = [], lastX = -1;
   for (let i = 0; i < n; i++) {
     if (s[i] === 'X') {
@@ -175,17 +199,24 @@ function detectAllPatterns(series) {
   feats.chuKyX = cycleX.length > 0
     ? cycleX.reduce((a, b) => a + b, 0) / cycleX.length : 2;
 
-  // --- Gap (khoảng cách lần cuối) ---
+  // Gap
   feats.gapT = s.indexOf('T');
   feats.gapX = s.indexOf('X');
   if (feats.gapT === -1) feats.gapT = 99;
   if (feats.gapX === -1) feats.gapX = 99;
 
-  // ==========================================================
-  // CẤP 4: MARKOV + N-GRAM (học chuỗi)
-  // ==========================================================
-  // --- Markov bậc 1-12 ---
-  for (let k = 1; k <= 12; k++) {
+  // Xu hướng 3 giai đoạn
+  const g1 = s.slice(0, 15);   // gần nhất
+  const g2 = s.slice(15, 30);  // vừa
+  const g3 = s.slice(30, 45);  // cũ
+  feats.g1T = g1.filter(x => x === 'T').length / 15;
+  feats.g2T = g2.filter(x => x === 'T').length / 15;
+  feats.g3T = g3.filter(x => x === 'T').length / 15;
+  feats.trendUp = feats.g1T > feats.g2T && feats.g2T > feats.g3T;
+  feats.trendDown = feats.g1T < feats.g2T && feats.g2T < feats.g3T;
+
+  // ========== CẤP 4: MARKOV + N-GRAM ==========
+  for (let k = 1; k <= 15; k++) {
     const key = s.slice(0, k).join('');
     let t = 0, x = 0;
     for (let i = k; i < n; i++) {
@@ -196,8 +227,7 @@ function detectAllPatterns(series) {
     feats[`mk${k}`] = { key, t, x, total: t + x };
   }
 
-  // --- N-gram 2-10 ---
-  for (let ng = 2; ng <= 10; ng++) {
+  for (let ng = 2; ng <= 12; ng++) {
     const key = s.slice(0, ng).join('');
     let t = 0, x = 0;
     for (let i = ng; i < n; i++) {
@@ -208,16 +238,12 @@ function detectAllPatterns(series) {
     feats[`ngram${ng}`] = { key, t, x, total: t + x };
   }
 
-  // ==========================================================
-  // CẤP 5: ĐỐI XỨNG + FIBONACCI + MOMENTUM
-  // ==========================================================
-  // --- Palindrome (đối xứng) ---
-  for (let len = 4; len <= 12; len += 2) {
+  // ========== CẤP 5: ĐỐI XỨNG + FIBONACCI + MOMENTUM ==========
+  for (let len = 4; len <= 14; len += 2) {
     const palin = s.slice(0, len).join('');
     feats[`doiXung${len}`] = palin === palin.split('').reverse().join('');
   }
 
-  // --- Symmetry score (nửa đầu vs nửa sau) ---
   const half = Math.floor(n / 2);
   const fh = s.slice(0, half).join('');
   const sh = s.slice(half, half * 2).join('');
@@ -227,8 +253,8 @@ function detectAllPatterns(series) {
   }
   feats.doiXungScore = same / Math.min(fh.length, sh.length);
 
-  // --- Fibonacci positions ---
-  const fibs = [1, 2, 3, 5, 8, 13, 21, 34];
+  // Fibonacci
+  const fibs = [1, 2, 3, 5, 8, 13, 21, 34, 55];
   let fibT = 0, fibX = 0;
   for (const f of fibs) {
     if (s[f] === 'T') fibT++; else if (s[f] === 'X') fibX++;
@@ -236,26 +262,27 @@ function detectAllPatterns(series) {
   feats.fibT = fibT;
   feats.fibX = fibX;
 
-  // --- Momentum (10 phiên gần vs 10 phiên cũ) ---
+  // Momentum
   const r10 = s.slice(0, 10);
   const o10 = s.slice(10, 20);
   feats.momentumT = (r10.filter(x => x === 'T').length / 10) -
                     (o10.filter(x => x === 'T').length / 10);
   feats.momentumX = -feats.momentumT;
 
-  // --- Alternating ratio ---
+  // Alternating
   let alt = 0;
   for (let i = 1; i < n; i++) if (s[i] !== s[i - 1]) alt++;
   feats.altRatio = alt / (n - 1);
+  feats.alternating = feats.altRatio > 0.65;
 
-  // --- Reversal rate ---
+  // Reversal
   let rev = 0;
   for (let i = 1; i < n - 1; i++) {
     if (s[i] !== s[i - 1] && s[i] !== s[i + 1]) rev++;
   }
   feats.reversalRate = n > 2 ? rev / (n - 2) : 0;
 
-  // --- Even/odd position bias ---
+  // Lệch vị trí chẵn/lẻ
   let evenT = 0, evenTotal = 0;
   for (let i = 0; i < n; i += 2) {
     evenTotal++;
@@ -263,274 +290,199 @@ function detectAllPatterns(series) {
   }
   feats.leViTriT = evenTotal > 0 ? evenT / evenTotal : 0.5;
 
-  // --- Đầu phiên vs cuối phiên ---
-  const head = s.slice(0, 20);
-  const tail = s.slice(-20);
-  feats.dauTyLeT = head.filter(x => x === 'T').length / 20;
-  feats.duoiTyLeT = tail.filter(x => x === 'T').length / 20;
-
-  // --- Số phiên liên tiếp không đổi (streak count) ---
-  feats.soLanDoi = alt;
-
   return feats;
 }
 
 // =====================================================================
-//             14 ENGINES — KHÔNG RANDOM, CHỈ TÍNH TOÁN
+//        20 ENGINES — MỖI ENGINE MỘT CHIẾN LƯỢC RIÊNG
 // =====================================================================
 
-// ENGINE 1: MARKOV CHAIN bậc 1-12
+// ENGINE 1: MARKOV CHAIN bậc 1-15
 function engineMarkov(f) {
   let sT = 0, sX = 0;
-  for (let k = 1; k <= 12; k++) {
+  for (let k = 1; k <= 15; k++) {
     const m = f[`mk${k}`];
     if (!m || m.total < 2) continue;
-    // Laplace smoothing + trọng số giảm dần theo bậc
-    const w = Math.pow(1.35, 12 - k) * (m.total / (m.total + 3));
+    const w = Math.pow(1.4, 15 - k) * (m.total / (m.total + 3));
     sT += ((m.t + 1) / (m.total + 2)) * w;
     sX += ((m.x + 1) / (m.total + 2)) * w;
   }
   return { T: sT, X: sX };
 }
 
-// ENGINE 2: STREAK BREAKER — bẻ bệt
+// ENGINE 2: STREAK BREAKER
 function engineStreak(f) {
   const score = { T: 0, X: 0 };
   const side = f.streakSide;
   const opp = side === 'T' ? 'X' : 'T';
   const st = f.streak, avg = f.avgRun, std = f.stdRun;
 
-  // Streak > trung bình + 1 std → khả năng bẻ cao
-  if (st > avg + std) {
-    score[opp] += 1.2 + (st - avg) * 0.4;
-  } else if (st < avg - std && st < 2) {
-    score[side] += 0.6;
-  }
+  if (st > avg + std) score[opp] += 1.2 + (st - avg) * 0.4;
+  else if (st < avg - std && st < 2) score[side] += 0.6;
 
-  // Bệt cực dài → gãy sớm
   if (st >= 5) score[opp] += 0.8;
   if (st >= 7) score[opp] += 1.2;
   if (st >= 9) score[opp] += 1.5;
-
-  // Chạm max run → bẻ
   if (st >= f.maxRun && st >= 4) score[opp] += 0.7;
-
-  // Chạm median run
   if (st === f.medianRun && st >= 2) score[opp] += 0.3;
 
   return score;
 }
 
-// ENGINE 3: FREQUENCY / MEAN REVERSION
+// ENGINE 3: FREQUENCY
 function engineFrequency(f) {
   const score = { T: 0, X: 0 };
   const devT = f.tyLeT - 0.5;
-
-  // Nếu T xuất hiện quá nhiều → nghiêng về X
   score.T -= devT * 2.2;
   score.X += devT * 2.2;
-
-  // Lệch cực mạnh → đảo mạnh
   if (f.tyLeT > 0.7) score.X += 1.5;
   if (f.tyLeX > 0.7) score.T += 1.5;
-
-  // Gap: bên nào lâu không ra → sắp ra
   if (f.gapT >= 5) score.T += f.gapT * 0.12;
   if (f.gapX >= 5) score.X += f.gapX * 0.12;
-
-  // Chu kỳ
-  if (f.chuKyT >= 3 && f.gapT >= f.chuKyT - 1) score.T += 0.5;
-  if (f.chuKyX >= 3 && f.gapX >= f.chuKyX - 1) score.X += 0.5;
-
   return score;
 }
 
-// ENGINE 4: CẦU CỔ ĐIỂN (1-1, 2-2, 3-3, 4-4)
+// ENGINE 4: CẦU CỔ ĐIỂN
 function engineCauCoDien(f, series) {
   const score = { T: 0, X: 0 };
   const s = series.slice(0, 20).join('');
 
-  // Cầu 1-1
-  if (f.cau11_strong) {
-    score[series[0] === 'T' ? 'X' : 'T'] += 2.0;
-  } else if (f.cau11) {
-    score[series[0] === 'T' ? 'X' : 'T'] += 1.2;
+  if (f.cau11_super) score[series[0] === 'T' ? 'X' : 'T'] += 2.5;
+  else if (f.cau11_strong) score[series[0] === 'T' ? 'X' : 'T'] += 2.0;
+  else if (f.cau11) score[series[0] === 'T' ? 'X' : 'T'] += 1.2;
+
+  if (f.cau22_super) score[series[0] === 'T' ? 'X' : 'T'] += 1.8;
+  else if (f.cau22_strong) {
+    if (/(TTTT|XXXX)$/.test(s)) score[series[0] === 'T' ? 'X' : 'T'] += 1.3;
+    else score[series[0] === 'T' ? 'X' : 'T'] += 0.8;
   }
 
-  // Cầu 2-2
-  if (f.cau22_strong) {
-    // Đang ở cuối nhịp 2 → bẻ
-    if (/(TTTT|XXXX)$/.test(s)) {
-      score[series[0] === 'T' ? 'X' : 'T'] += 1.3;
-    } else if (/(TT|XX)$/.test(s)) {
-      score[series[0] === 'T' ? 'X' : 'T'] += 0.8;
-    }
-  }
-
-  // Cầu 3-3
-  if (f.cau33) {
-    if (/(TTTTTT|XXXXXX)$/.test(s)) {
-      score[series[0] === 'T' ? 'X' : 'T'] += 1.2;
-    }
-  }
-
-  // Cầu 4-4
-  if (f.cau44) {
-    score[series[0] === 'T' ? 'X' : 'T'] += 1.5;
-  }
-
-  // Cầu bệt dài → nghi ngờ gãy
-  if (f.betDai7) score[series[0] === 'T' ? 'X' : 'T'] += 1.5;
+  if (f.cau33 && /(TTTTTT|XXXXXX)$/.test(s)) score[series[0] === 'T' ? 'X' : 'T'] += 1.2;
+  if (f.cau44) score[series[0] === 'T' ? 'X' : 'T'] += 1.5;
+  if (f.betDai9) score[series[0] === 'T' ? 'X' : 'T'] += 2.0;
+  else if (f.betDai7) score[series[0] === 'T' ? 'X' : 'T'] += 1.5;
   else if (f.betDai5) score[series[0] === 'T' ? 'X' : 'T'] += 0.8;
 
   return score;
 }
 
-// ENGINE 5: CẦU PHỨC TẠP (1-2-1, 2-1-2, 1-2-2-1, 3-2-3)
+// ENGINE 5: CẦU PHỨC TẠP
 function engineCauPhucTap(f, series) {
   const score = { T: 0, X: 0 };
   const s = series.slice(0, 12).join('');
 
-  // 1-2-1
   if (f.cau121) {
     if (s.startsWith('TXXT')) score.X += 1.0;
     if (s.startsWith('XTTX')) score.T += 1.0;
   }
-
-  // 2-1-2
   if (f.cau212) {
     if (s.startsWith('TTXXTT')) score.X += 0.9;
     if (s.startsWith('XXTTXX')) score.T += 0.9;
   }
-
-  // 1-2-2-1
   if (f.cau1221) {
     if (s.startsWith('TXXTTXXT')) score.T += 1.2;
     if (s.startsWith('XTTXXTTX')) score.X += 1.2;
   }
-
-  // 3-2-3
   if (f.cau323) {
     if (s.startsWith('TTTXXTTT')) score.T += 1.1;
     if (s.startsWith('XXXTTXXX')) score.X += 1.1;
   }
-
+  if (f.cau232) {
+    if (s.startsWith('TTXXXTT')) score.T += 1.0;
+    if (s.startsWith('XXTTTXX')) score.X += 1.0;
+  }
+  if (f.cau424) {
+    if (s.startsWith('TTTTXXTTTT')) score.T += 1.5;
+    if (s.startsWith('XXXXTTXXXX')) score.X += 1.5;
+  }
   return score;
 }
 
-// ENGINE 6: N-GRAM 2-10
+// ENGINE 6: N-GRAM
 function engineNGram(f) {
   let sT = 0, sX = 0;
-  for (let ng = 2; ng <= 10; ng++) {
+  for (let ng = 2; ng <= 12; ng++) {
     const g = f[`ngram${ng}`];
     if (!g || g.total < 2) continue;
-    const w = Math.pow(1.45, ng - 2) * (g.total / (g.total + 3));
+    const w = Math.pow(1.5, ng - 2) * (g.total / (g.total + 3));
     sT += ((g.t + 1) / (g.total + 2)) * w;
     sX += ((g.x + 1) / (g.total + 2)) * w;
   }
   return { T: sT, X: sX };
 }
 
-// ENGINE 7: BAYESIAN — xác suất có điều kiện
+// ENGINE 7: BAYESIAN
 function engineBayesian(f) {
   let pT = 0.5, pX = 0.5;
-
-  // Prior từ Markov bậc 4
   const m4 = f.mk4;
   if (m4 && m4.total >= 3) {
-    const likeT = (m4.t + 1) / (m4.total + 2);
-    const likeX = (m4.x + 1) / (m4.total + 2);
-    pT *= likeT * 2;
-    pX *= likeX * 2;
+    pT *= ((m4.t + 1) / (m4.total + 2)) * 2;
+    pX *= ((m4.x + 1) / (m4.total + 2)) * 2;
   }
-
-  // Prior từ Markov bậc 6
   const m6 = f.mk6;
   if (m6 && m6.total >= 2) {
     pT *= ((m6.t + 1) / (m6.total + 2)) * 1.5;
     pX *= ((m6.x + 1) / (m6.total + 2)) * 1.5;
   }
-
-  // Prior từ streak
+  const m8 = f.mk8;
+  if (m8 && m8.total >= 2) {
+    pT *= ((m8.t + 1) / (m8.total + 2)) * 1.3;
+    pX *= ((m8.x + 1) / (m8.total + 2)) * 1.3;
+  }
   if (f.streak >= 4) {
     const opp = f.streakSide === 'T' ? 'X' : 'T';
     if (opp === 'T') pT *= 1.25; else pX *= 1.25;
   }
-
   const sum = pT + pX || 1;
   return { T: (pT / sum) * 3.5, X: (pX / sum) * 3.5 };
 }
 
-// ENGINE 8: MOMENTUM — xu hướng
+// ENGINE 8: MOMENTUM
 function engineMomentum(f) {
   const score = { T: 0, X: 0 };
-
   if (f.momentumT > 0.15) score.T += f.momentumT * 2.5;
   if (f.momentumT < -0.15) score.X += Math.abs(f.momentumT) * 2.5;
-
-  // Đảo chiều khi momentum đạt đỉnh
   if (f.momentumT > 0.6) score.X += 0.6;
   if (f.momentumT < -0.6) score.T += 0.6;
-
   return score;
 }
 
 // ENGINE 9: ĐỐI XỨNG
 function engineDoiXung(f, series) {
   const score = { T: 0, X: 0 };
-
-  // Palindrome
-  for (let len = 4; len <= 12; len += 2) {
+  for (let len = 4; len <= 14; len += 2) {
     if (f[`doiXung${len}`]) score[series[len - 1]] += 1.2;
   }
-
-  // Symmetry score
   if (f.doiXungScore > 0.6) {
     const half = Math.floor(series.length / 2);
     if (series[0] === series[half]) score[series[0]] += 0.7;
   }
-
   return score;
 }
 
 // ENGINE 10: FIBONACCI
-function engineFibonacci(f, series) {
+function engineFibonacci(f) {
   const score = { T: 0, X: 0 };
-  const fibs = [1, 2, 3, 5, 8, 13, 21, 34];
-
-  // Nếu vị trí fib ra X nhiều → khả năng ra T
   if (f.fibX > f.fibT) score.T += 0.7;
   if (f.fibT > f.fibX) score.X += 0.7;
-
-  // Chu kỳ gần 1.618 (tỉ lệ vàng)
   if (Math.abs(f.chuKyT - 1.618) < 0.3) score.T += 0.6;
   if (Math.abs(f.chuKyX - 1.618) < 0.3) score.X += 0.6;
-
   return score;
 }
 
-// ENGINE 11: NEURAL NETWORK 1 LỚP ẨN (dựa trên đặc trưng)
+// ENGINE 11: NEURAL
 function engineNeural(f) {
-  // Trọng số thực nghiệm (đã học)
   const W = {
-    tyLeT: -1.4,
-    streak: -0.4,
-    avgRun: -0.3,
-    momentumT: 1.3,
-    reversalRate: -0.9,
-    entropy: -0.6,
-    doiXungScore: 0.7,
-    altRatio: -0.5,
-    nghiengT: 1.0,
-    nghiengX: -1.0,
+    tyLeT: -1.4, streak: -0.4, avgRun: -0.3, momentumT: 1.3,
+    reversalRate: -0.9, entropy: -0.6, doiXungScore: 0.7,
+    altRatio: -0.5, nghiengT: 1.0, nghiengX: -1.0,
+    trendUp: 0.8, trendDown: -0.8, leViTriT: -0.5,
   };
-
   let sum = 0;
   for (const [k, w] of Object.entries(W)) {
     const val = typeof f[k] === 'boolean' ? (f[k] ? 1 : 0) : (f[k] ?? 0.5);
     sum += (val - 0.5) * w;
   }
-
   const sig = 1 / (1 + Math.exp(-sum * 2));
   return { T: sig * 3.5, X: (1 - sig) * 3.5 };
 }
@@ -540,17 +492,14 @@ function engineReverse(f, series) {
   const score = { T: 0, X: 0 };
   const recent = series.slice(0, 8);
   const tCount = recent.filter(x => x === 'T').length;
-
   if (tCount >= 6) score.X += 0.8;
   if (tCount <= 2) score.T += 0.8;
-
   return score;
 }
 
-// ENGINE 13: DEEP TREE — pattern recursion depth 12
+// ENGINE 13: DEEP TREE
 function engineDeepTree(f, series) {
   const score = { T: 0, X: 0 };
-
   function search(depth) {
     if (depth < 2) return null;
     const key = series.slice(0, depth).join('');
@@ -563,8 +512,7 @@ function engineDeepTree(f, series) {
     if (t + x >= 2) return { t, x, total: t + x, depth };
     return search(depth - 1);
   }
-
-  const m = search(12);
+  const m = search(15);
   if (m) {
     const w = m.depth * 0.4 * (m.total / (m.total + 2));
     score.T += (m.t / m.total) * w;
@@ -573,114 +521,124 @@ function engineDeepTree(f, series) {
   return score;
 }
 
-// ENGINE 14: CHU KỲ (CYCLE)
-function engineChuKy(f, series) {
+// ENGINE 14: CHU KỲ
+function engineChuKy(f) {
   const score = { T: 0, X: 0 };
-
-  // Nếu T lâu chưa ra và chu kỳ T ngắn → khả năng ra T
   if (f.gapT >= f.chuKyT && f.chuKyT > 0) score.T += 0.8;
   if (f.gapX >= f.chuKyX && f.chuKyX > 0) score.X += 0.8;
-
-  // Nếu chu kỳ T > chu kỳ X → T đang "trễ"
   if (f.chuKyT > f.chuKyX * 1.3) score.T += 0.4;
   if (f.chuKyX > f.chuKyT * 1.3) score.X += 0.4;
+  if (f.stdChuKyT < 1 && f.gapT >= 2) score.T += 0.5;
+  return score;
+}
 
+// ENGINE 15: CẦU BẬC THANG
+function engineBacThang(f, series) {
+  const score = { T: 0, X: 0 };
+  if (f.cauBacThang) {
+    const s = series.slice(0, 12).join('');
+    if (/^(TX|XT)/.test(s)) score[series[0] === 'T' ? 'X' : 'T'] += 1.0;
+    else score[series[0]] += 0.8;
+  }
+  return score;
+}
+
+// ENGINE 16: CẦU HÌNH SIN
+function engineHinhSin(f, series) {
+  const score = { T: 0, X: 0 };
+  if (f.cauHinhSin) {
+    const s = series.slice(0, 6).join('');
+    if (/^(TTXXTT|XXTTXX)$/.test(s)) {
+      score[series[0] === 'T' ? 'X' : 'T'] += 0.9;
+    }
+  }
+  return score;
+}
+
+// ENGINE 17: TREND 3 GIAI ĐOẠN
+function engineTrend3(f) {
+  const score = { T: 0, X: 0 };
+  if (f.trendUp) score.T += 1.0;
+  if (f.trendDown) score.X += 1.0;
+  // Nếu trend đảo
+  if (f.g1T > 0.6 && f.g3T < 0.4) score.X += 0.6;
+  if (f.g1T < 0.4 && f.g3T > 0.6) score.T += 0.6;
+  return score;
+}
+
+// ENGINE 18: GAP + CHU KỲ KẾT HỢP
+function engineGapChuKy(f) {
+  const score = { T: 0, X: 0 };
+  // Nếu gap T vượt chu kỳ T rõ rệt
+  if (f.gapT >= f.chuKyT + f.stdChuKyT) score.T += 1.2;
+  if (f.gapX >= f.chuKyX + 1) score.X += 1.0;
+  return score;
+}
+
+// ENGINE 19: MARKOV + STREAK KẾT HỢP
+function engineMarkovStreak(f) {
+  const score = { T: 0, X: 0 };
+  const m = f.mk3;
+  if (m && m.total >= 3) {
+    const biasT = (m.t + 1) / (m.total + 2);
+    const biasX = (m.x + 1) / (m.total + 2);
+    if (f.streak >= 3) {
+      const opp = f.streakSide === 'T' ? 'X' : 'T';
+      if (opp === 'T') score.T += biasT * 1.5;
+      else score.X += biasX * 1.5;
+    } else {
+      score.T += biasT * 1.0;
+      score.X += biasX * 1.0;
+    }
+  }
+  return score;
+}
+
+// ENGINE 20: ENSEMBLE MARKOV ĐA BẬC
+function engineMarkovMulti(f) {
+  const score = { T: 0, X: 0 };
+  const keys = [2, 3, 4, 5, 6];
+  for (const k of keys) {
+    const m = f[`mk${k}`];
+    if (!m || m.total < 2) continue;
+    const biasT = (m.t + 1) / (m.total + 2);
+    const biasX = (m.x + 1) / (m.total + 2);
+    const w = 1 / k;
+    score.T += biasT * w;
+    score.X += biasX * w;
+  }
   return score;
 }
 
 // =====================================================================
-//              ENSEMBLE — KẾT HỢP 14 ENGINES
+//        20 ENGINES — DANH SÁCH + TRỌNG SỐ MẶC ĐỊNH
 // =====================================================================
 const ENGINES = [
-  { name: 'markov',    fn: engineMarkov,       w: 1.6 },
-  { name: 'streak',    fn: engineStreak,       w: 1.4 },
-  { name: 'frequency', fn: engineFrequency,    w: 1.1 },
-  { name: 'cauCoDien', fn: engineCauCoDien,    w: 1.5 },
-  { name: 'cauPhucTap',fn: engineCauPhucTap,   w: 1.3 },
-  { name: 'ngram',     fn: engineNGram,        w: 1.5 },
-  { name: 'bayesian',  fn: engineBayesian,     w: 1.3 },
-  { name: 'momentum',  fn: engineMomentum,     w: 0.9 },
-  { name: 'doiXung',   fn: engineDoiXung,      w: 0.9 },
-  { name: 'fibonacci', fn: engineFibonacci,    w: 0.7 },
-  { name: 'neural',    fn: engineNeural,       w: 1.2 },
-  { name: 'reverse',   fn: engineReverse,      w: 0.6 },
-  { name: 'deepTree',  fn: engineDeepTree,     w: 1.4 },
-  { name: 'chuKy',     fn: engineChuKy,        w: 1.0 },
+  { name: 'markov',        fn: engineMarkov,       w: 1.6,  layer: 'cao' },
+  { name: 'streak',        fn: engineStreak,       w: 1.4,  layer: 'trung' },
+  { name: 'frequency',     fn: engineFrequency,    w: 1.1,  layer: 'trung' },
+  { name: 'cauCoDien',     fn: engineCauCoDien,    w: 1.5,  layer: 'trung' },
+  { name: 'cauPhucTap',    fn: engineCauPhucTap,   w: 1.3,  layer: 'trung' },
+  { name: 'ngram',         fn: engineNGram,        w: 1.5,  layer: 'cao' },
+  { name: 'bayesian',      fn: engineBayesian,     w: 1.3,  layer: 'cao' },
+  { name: 'momentum',      fn: engineMomentum,     w: 0.9,  layer: 'trung' },
+  { name: 'doiXung',       fn: engineDoiXung,      w: 0.9,  layer: 'trung' },
+  { name: 'fibonacci',     fn: engineFibonacci,    w: 0.7,  layer: 'thap' },
+  { name: 'neural',        fn: engineNeural,       w: 1.2,  layer: 'cao' },
+  { name: 'reverse',       fn: engineReverse,      w: 0.6,  layer: 'thap' },
+  { name: 'deepTree',      fn: engineDeepTree,     w: 1.4,  layer: 'cao' },
+  { name: 'chuKy',         fn: engineChuKy,        w: 1.0,  layer: 'trung' },
+  { name: 'bacThang',      fn: engineBacThang,     w: 0.8,  layer: 'trung' },
+  { name: 'hinhSin',       fn: engineHinhSin,      w: 0.8,  layer: 'trung' },
+  { name: 'trend3',        fn: engineTrend3,       w: 1.1,  layer: 'cao' },
+  { name: 'gapChuKy',      fn: engineGapChuKy,     w: 1.2,  layer: 'cao' },
+  { name: 'markovStreak',  fn: engineMarkovStreak, w: 1.3,  layer: 'cao' },
+  { name: 'markovMulti',   fn: engineMarkovMulti,  w: 1.2,  layer: 'cao' },
 ];
 
-function ensemblePredict(feats, series, gameKey) {
-  const mem = memory[gameKey];
-  const votes = { T: 0, X: 0 };
-  const engineResults = {};
-
-  for (const eng of ENGINES) {
-    const s = eng.fn(feats, series);
-    engineResults[eng.name] = s;
-
-    // Lấy trọng số đã học (EMA) hoặc mặc định
-    const learned = mem.engines.get(eng.name);
-    const weight = learned
-      ? learned.weight * 0.7 + eng.w * 0.3
-      : eng.w;
-
-    const total = s.T + s.X;
-    if (total > 0) {
-      votes.T += (s.T / total) * weight;
-      votes.X += (s.X / total) * weight;
-    }
-  }
-
-  const predictSide = votes.T >= votes.X ? 'T' : 'X';
-  const totalVote = votes.T + votes.X || 1;
-  const doLech = Math.abs(votes.T - votes.X) / totalVote;
-
-  // Đếm engines đồng thuận
-  let dongThuan = 0, tongEngine = 0;
-  for (const eng of ENGINES) {
-    const s = engineResults[eng.name];
-    const t = s.T + s.X;
-    if (t === 0) continue;
-    tongEngine++;
-    if ((s.T >= s.X ? 'T' : 'X') === predictSide) dongThuan++;
-  }
-  const tyLeDongThuan = tongEngine > 0 ? dongThuan / tongEngine : 0.5;
-
-  // Pattern bonus từ memory
-  const patKey = buildPatternKey(feats);
-  let patternBonus = 0;
-  if (mem.patterns.has(patKey)) {
-    const p = mem.patterns.get(patKey);
-    const total = p.correct + p.wrong;
-    if (total >= 5) {
-      const acc = p.correct / total;
-      patternBonus = (acc - 0.5) * 0.12; // -6% → +6%
-    }
-  }
-
-  // Confidence: 50% + độ lệch × 20% + đồng thuận × 10% + pattern
-  let confidence = 50
-    + doLech * 20
-    + tyLeDongThuan * 10
-    + patternBonus * 100;
-
-  confidence = clamp(confidence, 50, 80);
-  confidence = round(confidence, 2);
-
-  return {
-    predictSide,
-    predictName: sideName(predictSide),
-    votes,
-    engineResults,
-    confidence,
-    chiTiet: {
-      doLech: round(doLech * 100, 2),
-      dongThuan: `${dongThuan}/${tongEngine}`,
-      tyLeDongThuan: round(tyLeDongThuan * 100, 2),
-      patternBonus: round(patternBonus * 100, 2),
-    },
-  };
-}
-
+// =====================================================================
+//        MULTI-LAYER VOTING: CAO / TRUNG / THẤP
+// =====================================================================
 function buildPatternKey(f) {
   return [
     f.mk2.key, f.mk4.key, f.streak, f.streakSide,
@@ -692,14 +650,118 @@ function buildPatternKey(f) {
   ].join('|');
 }
 
+function ensemblePredict(feats, series, gameKey) {
+  const mem = memory[gameKey];
+
+  const layerVotes = {
+    cao: { T: 0, X: 0, weight: 0 },
+    trung: { T: 0, X: 0, weight: 0 },
+    thap: { T: 0, X: 0, weight: 0 },
+  };
+  const engineResults = {};
+  const votes = { T: 0, X: 0 };
+
+  for (const eng of ENGINES) {
+    const s = eng.fn(feats, series);
+    engineResults[eng.name] = s;
+
+    const learned = mem.engines.get(eng.name);
+    let weight = learned
+      ? learned.weight * 0.7 + eng.w * 0.3
+      : eng.w;
+
+    // Nếu engine đang thua nhiều liên tiếp → giảm weight
+    if (learned && learned.streakLoss >= 3) {
+      weight *= 0.7;
+    }
+    // Nếu engine đang thắng nhiều liên tiếp → tăng weight
+    if (learned && learned.streakWin >= 3) {
+      weight *= 1.15;
+    }
+
+    const total = s.T + s.X;
+    if (total > 0) {
+      const tRatio = s.T / total;
+      const xRatio = s.X / total;
+      votes.T += tRatio * weight;
+      votes.X += xRatio * weight;
+      layerVotes[eng.layer].T += tRatio * weight;
+      layerVotes[eng.layer].X += xRatio * weight;
+      layerVotes[eng.layer].weight += weight;
+    }
+  }
+
+  const predictSide = votes.T >= votes.X ? 'T' : 'X';
+  const totalVote = votes.T + votes.X || 1;
+  const doLech = Math.abs(votes.T - votes.X) / totalVote;
+
+  // Đồng thuận engine
+  let dongThuan = 0, tongEngine = 0;
+  for (const eng of ENGINES) {
+    const s = engineResults[eng.name];
+    const t = s.T + s.X;
+    if (t === 0) continue;
+    tongEngine++;
+    if ((s.T >= s.X ? 'T' : 'X') === predictSide) dongThuan++;
+  }
+  const tyLeDongThuan = tongEngine > 0 ? dongThuan / tongEngine : 0.5;
+
+  // Đồng thuận 3 layer
+  let layerDongThuan = 0;
+  for (const layer of ['cao', 'trung', 'thap']) {
+    const lv = layerVotes[layer];
+    if (lv.T + lv.X === 0) continue;
+    if ((lv.T >= lv.X ? 'T' : 'X') === predictSide) layerDongThuan++;
+  }
+  const tyLeLayer = layerDongThuan / 3;
+
+  // Pattern bonus
+  const patKey = buildPatternKey(feats);
+  let patternBonus = 0;
+  if (mem.patterns.has(patKey)) {
+    const p = mem.patterns.get(patKey);
+    const total = p.correct + p.wrong;
+    if (total >= 5) {
+      patternBonus = (p.correct / total - 0.5) * 0.12;
+    }
+  }
+
+  // Chuỗi thắng hiện tại
+  const streakWinBonus = Math.min(mem.stats.streakWin * 0.01, 0.05);
+
+  // Công thức cuối
+  let confidence = 50
+    + doLech * 18         // 0 → 18
+    + tyLeDongThuan * 8   // 0 → 8
+    + tyLeLayer * 3       // 0 → 3
+    + patternBonus * 100  // -6 → +6
+    + streakWinBonus * 100; // 0 → 5
+
+  confidence = clamp(confidence, 50, 80);
+  confidence = round(confidence, 2);
+
+  return {
+    predictSide,
+    predictName: sideName(predictSide),
+    confidence,
+    chiTiet: {
+      doLech: round(doLech * 100, 2),
+      dongThuan: `${dongThuan}/${tongEngine}`,
+      tyLeDongThuan: round(tyLeDongThuan * 100, 2),
+      tyLeLayer: round(tyLeLayer * 100, 2),
+    },
+  };
+}
+
 // =====================================================================
-//              LEARNING — cập nhật trọng số theo kết quả
+//        LEARNING — Weight + Momentum
 // =====================================================================
 function updateEngineWeights(gameKey, list) {
   const mem = memory[gameKey];
   const series = toSeries(list);
-  const window = 40;
+  const window = 50;
   const hits = new Map(), totals = new Map();
+  const recentHits = new Map(), recentTotals = new Map();
 
   for (let i = 8; i < Math.min(window, series.length - 1); i++) {
     const sub = series.slice(i);
@@ -710,25 +772,45 @@ function updateEngineWeights(gameKey, list) {
       if (total === 0) continue;
       const pred = s.T >= s.X ? 'T' : 'X';
       const actual = series[i - 1];
+
       if (!hits.has(eng.name)) { hits.set(eng.name, 0); totals.set(eng.name, 0); }
       totals.set(eng.name, totals.get(eng.name) + 1);
       if (pred === actual) hits.set(eng.name, hits.get(eng.name) + 1);
+
+      // Recent window (10 phiên gần nhất)
+      if (i < 18) {
+        if (!recentHits.has(eng.name)) { recentHits.set(eng.name, 0); recentTotals.set(eng.name, 0); }
+        recentTotals.set(eng.name, recentTotals.get(eng.name) + 1);
+        if (pred === actual) recentHits.set(eng.name, recentHits.get(eng.name) + 1);
+      }
     }
   }
 
   for (const eng of ENGINES) {
     const total = totals.get(eng.name) || 0;
-    if (total < 10) continue; // Chỉ học khi đủ mẫu
+    if (total < 10) continue;
     const acc = hits.get(eng.name) / total;
+
+    const recentTotal = recentTotals.get(eng.name) || 0;
+    const recentAcc = recentTotal > 0
+      ? recentHits.get(eng.name) / recentTotal
+      : acc;
+
+    // Target weight dựa trên accuracy
     const targetW = eng.w * (0.5 + acc * 1.0);
     const old = mem.engines.get(eng.name);
     const oldW = old ? old.weight : eng.w;
-    const newW = oldW * 0.9 + targetW * 0.1; // EMA chậm hơn để ổn định
+
+    // EMA chậm + momentum từ recent acc
+    const momentum = (recentAcc - acc) * 0.3;
+    const newW = oldW * 0.9 + (targetW + momentum) * 0.1;
+
     mem.engines.set(eng.name, {
       weight: clamp(newW, 0.3, 3.0),
       hits: hits.get(eng.name) || 0,
       total,
       acc: round(acc, 4),
+      recentAcc: round(recentAcc, 4),
     });
   }
 }
@@ -751,7 +833,7 @@ function learnFromHistory(gameKey, list) {
 }
 
 // =====================================================================
-//              API DUY NHẤT
+//        API — JSON NGẮN GỌN
 // =====================================================================
 app.get('/api/du-doan/:ban', async (req, res) => {
   const gameKey = req.params.ban;
@@ -771,11 +853,9 @@ app.get('/api/du-doan/:ban', async (req, res) => {
       return res.status(500).json({ loi: 'Không lấy được dữ liệu' });
     }
 
-    // Học từ lịch sử
     learnFromHistory(gameKey, list);
     updateEngineWeights(gameKey, list);
 
-    // Dự đoán
     const series = toSeries(list);
     const feats = detectAllPatterns(series);
     const result = ensemblePredict(feats, series, gameKey);
@@ -784,13 +864,12 @@ app.get('/api/du-doan/:ban', async (req, res) => {
     const nextSession = latest.SessionId + 1;
     const mem = memory[gameKey];
 
-    // Cập nhật lịch sử đúng/sai
+    // Cập nhật lịch sử
     const lastRec = mem.history[0];
     if (lastRec && lastRec.session < latest.SessionId) {
       const found = list.find(x => x.SessionId === lastRec.session);
       if (found && !lastRec.actual) {
         lastRec.actual = toResult(found);
-        lastRec.actualName = sideName(toResult(found));
         lastRec.correct = lastRec.actual === lastRec.predictSide;
         if (lastRec.correct) {
           mem.stats.win++;
@@ -808,83 +887,21 @@ app.get('/api/du-doan/:ban', async (req, res) => {
       mem.history.unshift({
         session: nextSession,
         predictSide: result.predictSide,
-        predictName: result.predictName,
-        confidence: result.confidence,
         createdAt: new Date().toISOString(),
       });
-      if (mem.history.length > 300) mem.history.pop();
+      if (mem.history.length > 500) mem.history.pop();
     }
 
     saveMemory();
 
-    const tongDuDoan = mem.stats.win + mem.stats.lose;
-    const tyLeDung = tongDuDoan > 0
-      ? round(mem.stats.win / tongDuDoan * 100, 2) : 0;
-
-    // Đếm số cầu đang có
-    const cauDangCo = [];
-    if (feats.cau11_strong) cauDangCo.push('Cầu 1-1 mạnh');
-    else if (feats.cau11) cauDangCo.push('Cầu 1-1');
-    if (feats.cau22_strong) cauDangCo.push('Cầu 2-2 mạnh');
-    else if (feats.cau22) cauDangCo.push('Cầu 2-2');
-    if (feats.cau33) cauDangCo.push('Cầu 3-3');
-    if (feats.cau44) cauDangCo.push('Cầu 4-4');
-    if (feats.cau121) cauDangCo.push('Cầu 1-2-1');
-    if (feats.cau212) cauDangCo.push('Cầu 2-1-2');
-    if (feats.cau1221) cauDangCo.push('Cầu 1-2-2-1');
-    if (feats.cau323) cauDangCo.push('Cầu 3-2-3');
-    if (feats.betDai7) cauDangCo.push('Bệt dài >=7');
-    else if (feats.betDai5) cauDangCo.push('Bệt dài >=5');
-    if (feats.nghiengT) cauDangCo.push('Nghiêng Tài');
-    if (feats.nghiengX) cauDangCo.push('Nghiêng Xỉu');
-    if (feats.alternating) cauDangCo.push('Đảo liên tục');
-    if (feats.doiXung6) cauDangCo.push('Đối xứng 6');
-    if (feats.doiXung8) cauDangCo.push('Đối xứng 8');
-
-    // Engine info
-    const engineInfo = ENGINES.map(e => {
-      const l = mem.engines.get(e.name);
-      return {
-        ten: e.name,
-        trongSo: l ? round(l.weight, 3) : e.w,
-        doChinhXac: l && l.total > 0
-          ? round(l.hits / l.total * 100, 1) : null,
-        soLanKhop: l ? `${l.hits}/${l.total}` : '0/0',
-      };
-    });
-
+    // ============== JSON NGẮN GỌN ==============
     res.json({
-      ban: GAMES[gameKey].name,
-      phienHienTai: latest.SessionId,
+      phien: latest.SessionId,
+      tong: latest.DiceSum,
+      ketQua: sideName(toResult(latest)),
       phienDuDoan: nextSession,
-      ketQuaPhienTruoc: {
-        xucXac: [latest.FirstDice, latest.SecondDice, latest.ThirdDice],
-        tong: latest.DiceSum,
-        ketQua: sideName(toResult(latest)),
-      },
       duDoan: result.predictName,
       tiLe: result.confidence,
-      doTinCay:
-        result.confidence >= 72 ? 'Rất cao' :
-        result.confidence >= 65 ? 'Cao' :
-        result.confidence >= 58 ? 'Trung bình' : 'Thấp',
-      cauDangNhanDien: cauDangCo,
-      thongKe: {
-        thang: mem.stats.win,
-        thua: mem.stats.lose,
-        tyLeDung: tyLeDung,
-        chuoiThang: mem.stats.streakWin,
-        chuoiThangDaiNhat: mem.stats.maxStreakWin,
-        soPatternDaHoc: mem.patterns.size,
-      },
-      chiTietTinhToan: result.chiTiet,
-      engines: engineInfo,
-      lichSuGanDay: list.slice(0, 20).map(x => ({
-        phien: x.SessionId,
-        xucXac: [x.FirstDice, x.SecondDice, x.ThirdDice],
-        tong: x.DiceSum,
-        ketQua: sideName(toResult(x)),
-      })),
     });
   } catch (e) {
     console.error(e);
@@ -896,20 +913,21 @@ app.get('/api/du-doan/:ban', async (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     ten: 'API Dự Đoán Tài Xỉu VIP',
-    phienBan: '6.0',
-    moTa: 'Nhận diện 30+ loại cầu, không random, 14 engines ensemble',
+    phienBan: '8.0',
+    moTa: '20 engines, 50+ loại cầu, multi-layer voting, không random',
     cacBan: {
       taixiu: '/api/du-doan/taixiu',
       md5: '/api/du-doan/md5',
     },
-    congThucTiLe: '50% + độ lệch × 20% + đồng thuận × 10% + pattern bonus',
+    congThucTiLe:
+      '50% + độ lệch × 18% + đồng thuận × 8% + layer × 3% + pattern bonus + streak win',
   });
 });
 
 // ================== START ==================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 API VIP 6.0 chạy tại http://localhost:${PORT}`);
+  console.log(`🚀 API VIP 8.0 chạy tại http://localhost:${PORT}`);
   console.log(`📊 Tài Xỉu: http://localhost:${PORT}/api/du-doan/taixiu`);
   console.log(`📊 MD5:     http://localhost:${PORT}/api/du-doan/md5`);
 });
